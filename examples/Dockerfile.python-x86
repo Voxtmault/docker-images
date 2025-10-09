@@ -1,0 +1,42 @@
+# Python development image for x86 (32-bit)
+FROM --platform=$TARGETPLATFORM python:3.11-slim
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+ARG BUILDTIME
+ARG VERSION
+ARG REVISION
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install common Python packages
+RUN pip install --no-cache-dir \
+    pip --upgrade \
+    setuptools \
+    wheel \
+    virtualenv \
+    pipenv \
+    poetry
+
+# Add labels
+LABEL org.opencontainers.image.created="${BUILDTIME}"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${REVISION}"
+LABEL org.opencontainers.image.platform="${TARGETPLATFORM}"
+LABEL org.opencontainers.image.description="Python development environment for x86"
+
+# Create app directory
+WORKDIR /app
+
+# Create non-root user
+RUN useradd -m -s /bin/bash python
+RUN chown -R python:python /app
+USER python
+
+CMD ["python", "--version"]

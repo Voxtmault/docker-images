@@ -1,0 +1,230 @@
+name: Multi-Architecture Docker Image Builder
+
+on:
+  push:
+    branches: 
+      - main
+      - 'build/*'
+      - 'flavors/*'
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: 'Image name (without registry prefix)'
+        required: true
+        default: 'custom-base'
+        type: string
+      dockerfile_path:
+        description: 'Path to Dockerfile'
+        required: true
+        default: './Dockerfile'
+        type: string
+      architectures:
+        description: 'Target architectures (comma-separated)'
+        required: true
+        default: 'linux/amd64,linux/arm64'
+        type: choice
+        options:
+          - 'linux/amd64'
+          - 'linux/arm64'
+          - 'linux/arm/v7'
+          - 'linux/386'
+          - 'linux/amd64,linux/arm64'
+          - 'linux/amd64,linux/arm/v7'
+          - 'linux/amd64,linux/arm64,linux/arm/v7'
+          - 'linux/amd64,linux/arm64,linux/arm/v7,linux/386'
+      build_context:
+        description: 'Build context path'
+        required: false
+        default: '.'
+        type: string
+      registry:
+        description: 'Container registry'
+        required: true
+        default: 'docker.io'
+        type: choice
+        options:
+          - 'docker.io'
+          - 'ghcr.io'
+      push_to_registry:
+        description: 'Push to registry'
+        required: true
+        default: true
+        type: boolean
+      tag_latest:
+        description: 'Tag as latest'
+        required: true
+        default: true
+        type: boolean
+
+env:
+  REGISTRY: ${{ github.event.inputs.registry || 'docker.io' }}
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      should_build: ${{ steps.check-changes.outputs.should_build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check for changes
+        id: check-changes
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Manual trigger - building requested image"
+          else
+            # Check if any Dockerfiles or related files changed
+            changed_files=$(git diff --name-only HEAD^ HEAD)
+            if echo "$changed_files" | grep -E "(Dockerfile|\.dockerignore|requirements\.txt|package\.json|Cargo\.toml|go\.mod|pom\.xml)" > /dev/null; then
+              echo "should_build=true" >> $GITHUB_OUTPUT
+              echo "Relevant files changed - will build"
+            else
+              echo "should_build=false" >> $GITHUB_OUTPUT
+              echo "No relevant files changed - skipping build"
+            fi
+          fi
+
+      - name: Set build matrix
+        id: set-matrix
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual trigger - use provided inputs
+            IMAGE_NAME="${{ github.event.inputs.image_name }}"
+            DOCKERFILE_PATH="${{ github.event.inputs.dockerfile_path }}"
+            ARCHITECTURES="${{ github.event.inputs.architectures }}"
+            BUILD_CONTEXT="${{ github.event.inputs.build_context }}"
+            
+            matrix=$(jq -n \
+              --arg name "$IMAGE_NAME" \
+              --arg dockerfile "$DOCKERFILE_PATH" \
+              --arg platforms "$ARCHITECTURES" \
+              --arg context "$BUILD_CONTEXT" \
+              '{include: [{image_name: $name, dockerfile: $dockerfile, platforms: $platforms, context: $context}]}')
+          else
+            # Automatic trigger - detect from branch name and file structure
+            BRANCH_NAME="${{ github.ref_name }}"
+            matrix='{"include":[]}'
+            
+            # Parse branch name for flavor detection
+            if [[ "$BRANCH_NAME" =~ ^build/(.+)$ ]] || [[ "$BRANCH_NAME" =~ ^flavors/(.+)$ ]]; then
+              FLAVOR="${BASH_REMATCH[1]}"
+              echo "Detected flavor: $FLAVOR"
+              
+              # Look for corresponding Dockerfiles
+              dockerfiles=$(find . -name "Dockerfile*$FLAVOR*" -o -name "Dockerfile" | head -5)
+              
+              for dockerfile in $dockerfiles; do
+                if [[ -f "$dockerfile" ]]; then
+                  # Determine architectures based on flavor/filename
+                  platforms="linux/amd64,linux/arm64"
+                  if [[ "$FLAVOR" == *"arm64"* ]] || [[ "$dockerfile" == *"arm64"* ]]; then
+                    platforms="linux/arm64"
+                  elif [[ "$FLAVOR" == *"arm32"* ]] || [[ "$dockerfile" == *"arm32"* ]] || [[ "$dockerfile" == *"armv7"* ]]; then
+                    platforms="linux/arm/v7"
+                  elif [[ "$FLAVOR" == *"x86"* ]] || [[ "$dockerfile" == *"x86"* ]]; then
+                    platforms="linux/386"
+                  elif [[ "$FLAVOR" == *"amd64"* ]] || [[ "$dockerfile" == *"amd64"* ]]; then
+                    platforms="linux/amd64"
+                  fi
+                  
+                  image_name=$(basename "$dockerfile" | sed 's/^Dockerfile\.*//' | sed 's/^Dockerfile$/base/' | tr '[:upper:]' '[:lower:]')
+                  if [[ -z "$image_name" ]] || [[ "$image_name" == "dockerfile" ]]; then
+                    image_name="$FLAVOR"
+                  fi
+                  
+                  matrix=$(echo "$matrix" | jq \
+                    --arg name "$image_name" \
+                    --arg dockerfile "$dockerfile" \
+                    --arg platforms "$platforms" \
+                    --arg context "$(dirname $dockerfile)" \
+                    '.include += [{image_name: $name, dockerfile: $dockerfile, platforms: $platforms, context: $context}]')
+                fi
+              done
+            else
+              # Default build for main branch
+              if [[ -f "./Dockerfile" ]]; then
+                matrix=$(jq -n '{include: [{image_name: "base", dockerfile: "./Dockerfile", platforms: "linux/amd64,linux/arm64", context: "."}]}')
+              fi
+            fi
+          fi
+          
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "Build matrix: $matrix"
+
+  build-and-push:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: env.REGISTRY == 'docker.io'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        if: env.REGISTRY == 'ghcr.io'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image_name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.ref_name }},enable=${{ github.ref_name != 'main' }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image_name }}
+            org.opencontainers.image.description=Custom Docker image for ${{ matrix.image_name }}
+            org.opencontainers.image.vendor=${{ github.repository_owner }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          push: ${{ github.event.inputs.push_to_registry != 'false' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDTIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+            REVISION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.revision'] }}
+
+      - name: Output image details
+        run: |
+          echo "🐳 Built and pushed: ${{ matrix.image_name }}"
+          echo "📁 Dockerfile: ${{ matrix.dockerfile }}"
+          echo "🏗️  Platforms: ${{ matrix.platforms }}"
+          echo "🏷️  Tags: ${{ steps.meta.outputs.tags }}"

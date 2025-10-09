@@ -1,0 +1,42 @@
+# Node.js image optimized for ARM32 (Raspberry Pi)
+FROM --platform=$TARGETPLATFORM node:18-bullseye-slim
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+ARG BUILDTIME
+ARG VERSION
+ARG REVISION
+
+# Install additional packages for ARM32 compatibility
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install global npm packages commonly needed
+RUN npm install -g \
+    npm@latest \
+    typescript \
+    @types/node \
+    nodemon \
+    pm2
+
+# Add labels
+LABEL org.opencontainers.image.created="${BUILDTIME}"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${REVISION}"
+LABEL org.opencontainers.image.platform="${TARGETPLATFORM}"
+LABEL org.opencontainers.image.description="Node.js development environment for ARM32"
+
+# Create app directory
+WORKDIR /app
+
+# Create non-root user
+RUN groupadd -r nodejs && useradd -r -g nodejs nodejs
+RUN chown -R nodejs:nodejs /app
+USER nodejs
+
+CMD ["node", "--version"]

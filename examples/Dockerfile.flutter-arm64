@@ -1,0 +1,58 @@
+# Flutter development image optimized for ARM64
+FROM --platform=$TARGETPLATFORM ubuntu:22.04
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+ARG BUILDTIME
+ARG VERSION
+ARG REVISION
+
+# Set environment variables
+ENV FLUTTER_HOME="/opt/flutter"
+ENV PATH="$FLUTTER_HOME/bin:$PATH"
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    unzip \
+    xz-utils \
+    zip \
+    libglu1-mesa \
+    openjdk-11-jdk \
+    wget \
+    clang \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libgtk-3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and install Flutter for the target platform
+RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+        FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.16.0-stable.tar.xz"; \
+    else \
+        FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.16.0-stable.tar.xz"; \
+    fi && \
+    wget -O flutter.tar.xz "$FLUTTER_URL" && \
+    tar xf flutter.tar.xz -C /opt && \
+    rm flutter.tar.xz
+
+# Pre-download Dart SDK and other dependencies
+RUN flutter precache
+RUN flutter doctor
+
+# Add labels
+LABEL org.opencontainers.image.created="${BUILDTIME}"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${REVISION}"
+LABEL org.opencontainers.image.platform="${TARGETPLATFORM}"
+LABEL org.opencontainers.image.description="Flutter development environment"
+
+# Create non-root user
+RUN useradd -m -s /bin/bash flutter
+USER flutter
+WORKDIR /home/flutter
+
+CMD ["flutter", "--version"]
