@@ -48,12 +48,19 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
 RUN chown -R flutter:flutter /opt/flutter && \
     chmod -R 755 /opt/flutter
 
-# Configure git safe directory and run Flutter setup as the flutter user
+# Configure git safe directory as root first, then download Dart SDK
+RUN git config --global --add safe.directory /opt/flutter
+
+# Switch to flutter user and set up Flutter environment
 USER flutter
-RUN git config --global --add safe.directory /opt/flutter && \
-    flutter config --no-analytics && \
-    flutter precache && \
-    flutter doctor
+
+# Initialize Flutter - this will download the Dart SDK automatically
+RUN flutter --version && \
+    flutter config --no-analytics
+
+# Now run precache and doctor with the Dart SDK available
+RUN flutter precache --verbose
+RUN flutter doctor
 
 # Add labels (switch back to root for labels, then back to flutter user)
 USER root

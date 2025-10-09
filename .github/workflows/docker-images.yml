@@ -3,7 +3,6 @@ name: Multi-Architecture Docker Image Builder
 on:
   push:
     branches: 
-      - main
       - 'build/*'
       - 'flavors/*'
   workflow_dispatch:
