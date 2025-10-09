@@ -6,6 +6,8 @@ ARG BUILDPLATFORM
 ARG BUILDTIME
 ARG VERSION
 ARG REVISION
+# Allow Flutter version to be specified at build time
+ARG FLUTTER_VERSION=3.35.4
 
 # Set environment variables
 ENV FLUTTER_HOME="/opt/flutter"
@@ -34,32 +36,26 @@ RUN apt-get update && apt-get install -y \
 # Create non-root user BEFORE installing Flutter
 RUN useradd -m -s /bin/bash flutter
 
-# Download and install Flutter for the target platform
-RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
-        FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.3-stable.tar.xz"; \
-    else \
-        FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.3-stable.tar.xz"; \
-    fi && \
-    wget -O flutter.tar.xz "$FLUTTER_URL" && \
-    tar xf flutter.tar.xz -C /opt && \
-    rm flutter.tar.xz
+# Install Flutter using git clone (more reliable than tar.xz)
+# Flutter version can be overridden at build time: --build-arg FLUTTER_VERSION=stable
+RUN git clone --depth 1 --single-branch -b $FLUTTER_VERSION \
+    https://github.com/flutter/flutter.git $FLUTTER_HOME
 
 # Fix ownership and permissions for Flutter directory
 RUN chown -R flutter:flutter /opt/flutter && \
     chmod -R 755 /opt/flutter
 
-# Configure git safe directory as root first, then download Dart SDK
+# Configure git safe directory as root first
 RUN git config --global --add safe.directory /opt/flutter
 
 # Switch to flutter user and set up Flutter environment
 USER flutter
 
-# Initialize Flutter - this will download the Dart SDK automatically
-RUN flutter --version && \
-    flutter config --no-analytics
+# Configure Flutter and download necessary components
+RUN flutter config --enable-linux-desktop --no-analytics && \
+    flutter precache --linux --no-android --no-ios --no-web --no-macos --no-windows
 
-# Now run precache and doctor with the Dart SDK available
-RUN flutter precache --verbose
+# Verify installation
 RUN flutter doctor
 
 # Add labels (switch back to root for labels, then back to flutter user)
