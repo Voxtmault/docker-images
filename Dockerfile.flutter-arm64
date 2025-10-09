@@ -1,5 +1,5 @@
 # Flutter development image optimized for ARM64
-FROM --platform=$TARGETPLATFORM ubuntu:22.04
+FROM ubuntu:22.04
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
@@ -31,29 +31,39 @@ RUN apt-get update && apt-get install -y \
     mpv \
     && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user BEFORE installing Flutter
+RUN useradd -m -s /bin/bash flutter
+
 # Download and install Flutter for the target platform
 RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
-        FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.16.0-stable.tar.xz"; \
+        FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.3-stable.tar.xz"; \
     else \
-        FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.16.0-stable.tar.xz"; \
+        FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.24.3-stable.tar.xz"; \
     fi && \
     wget -O flutter.tar.xz "$FLUTTER_URL" && \
     tar xf flutter.tar.xz -C /opt && \
     rm flutter.tar.xz
 
-# Pre-download Dart SDK and other dependencies
-RUN flutter precache
-RUN flutter doctor
+# Fix ownership and permissions for Flutter directory
+RUN chown -R flutter:flutter /opt/flutter && \
+    chmod -R 755 /opt/flutter
 
-# Add labels
+# Configure git safe directory and run Flutter setup as the flutter user
+USER flutter
+RUN git config --global --add safe.directory /opt/flutter && \
+    flutter config --no-analytics && \
+    flutter precache && \
+    flutter doctor
+
+# Add labels (switch back to root for labels, then back to flutter user)
+USER root
 LABEL org.opencontainers.image.created="${BUILDTIME}"
 LABEL org.opencontainers.image.version="${VERSION}"
 LABEL org.opencontainers.image.revision="${REVISION}"
 LABEL org.opencontainers.image.platform="${TARGETPLATFORM}"
 LABEL org.opencontainers.image.description="Flutter development environment"
 
-# Create non-root user
-RUN useradd -m -s /bin/bash flutter
+# Switch back to flutter user for runtime
 USER flutter
 WORKDIR /home/flutter
 
