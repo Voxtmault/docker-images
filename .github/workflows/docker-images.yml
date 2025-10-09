@@ -168,8 +168,10 @@ jobs:
             fi
           fi
           
-          echo "matrix=$matrix" >> $GITHUB_OUTPUT
-          echo "Build matrix: $matrix"
+          # Compact the JSON to avoid newline issues in GitHub Actions output
+          matrix_compact=$(echo "$matrix" | jq -c .)
+          echo "matrix=$matrix_compact" >> $GITHUB_OUTPUT
+          echo "Build matrix (compact): $matrix_compact"
 
   build-and-push:
     needs: detect-changes
