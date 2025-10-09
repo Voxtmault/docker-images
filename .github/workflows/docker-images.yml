@@ -69,7 +69,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0  # Fetch full history for proper git diff comparison
 
       - name: Check for changes
         id: check-changes
@@ -79,8 +79,23 @@ jobs:
             echo "Manual trigger - building requested image"
           else
             # Check if any Dockerfiles or related files changed
-            changed_files=$(git diff --name-only HEAD^ HEAD)
-            if echo "$changed_files" | grep -E "(Dockerfile|\.dockerignore|requirements\.txt|package\.json|Cargo\.toml|go\.mod|pom\.xml)" > /dev/null; then
+            # Handle cases where there's no previous commit (initial commit or shallow clone)
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              changed_files=$(git diff --name-only HEAD^ HEAD)
+              echo "Comparing with previous commit..."
+            else
+              # For initial commit or when HEAD^ doesn't exist, check all files
+              changed_files=$(git ls-files)
+              echo "No previous commit found, checking all files..."
+            fi
+            
+            echo "Changed files: $changed_files"
+            
+            # Always build on main branch if it's the initial commit or if relevant files changed
+            if [[ "${{ github.ref_name }}" == "main" ]] && ! git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              echo "should_build=true" >> $GITHUB_OUTPUT
+              echo "Initial commit on main branch - will build"
+            elif echo "$changed_files" | grep -E "(Dockerfile|\.dockerignore|requirements\.txt|package\.json|Cargo\.toml|go\.mod|pom\.xml)" > /dev/null; then
               echo "should_build=true" >> $GITHUB_OUTPUT
               echo "Relevant files changed - will build"
             else
